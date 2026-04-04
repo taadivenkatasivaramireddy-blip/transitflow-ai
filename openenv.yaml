@@ -1,0 +1,249 @@
+# openenv.yaml — Takshashila Transit OpenEnv Specification
+# Follows OpenEnv 1.0 standard
+
+id: TakshashilaTransit-v1
+version: "1.0.0"
+authors:
+  - name: Ram
+    affiliation: Takshashila University, Ongur, Tamil Nadu
+description: >
+  A real-world college bus fleet management environment set at
+  Takshashila University campus. An AI agent acts as the bus dispatcher,
+  controlling a single bus serving 8 campus stops across a morning route
+  (7:30 AM – 9:00 AM). The agent must maximise passenger throughput,
+  maintain schedule adherence, and manage fuel across 20 time steps.
+
+domain: transportation
+real_world: true
+tags: [fleet-management, scheduling, logistics, campus, india, fintech-adjacent]
+
+# ── Environment ────────────────────────────────────────────────────────────
+
+environment:
+  class: transit_env.TransitEnv
+  max_steps: 20
+  episode_type: finite-horizon
+  stochasticity: configurable   # none | low | high via difficulty param
+  
+  parameters:
+    seed:
+      type: int
+      default: 42
+      description: RNG seed for reproducibility
+    difficulty:
+      type: str
+      default: medium
+      choices: [easy, medium, hard]
+      description: >
+        Controls passenger variance (σ) and random event probability.
+        easy: σ=0.0, event_prob=0.0
+        medium: σ=0.3, event_prob=0.1
+        hard: σ=0.6, event_prob=0.2
+
+# ── Action Space ──────────────────────────────────────────────────────────
+
+action_space:
+  type: Discrete
+  n: 6
+  actions:
+    0:
+      name: MOVE_TO_NEXT_STOP
+      description: Advance bus to the next stop on the route
+      fuel_cost: 7.0
+    1:
+      name: WAIT_AT_STOP
+      description: Hold at current stop (max 2 steps before penalty)
+      fuel_cost: 0.0
+    2:
+      name: PICKUP_PASSENGERS
+      description: Board all waiting passengers at current stop
+      fuel_cost: 0.0
+    3:
+      name: SKIP_STOP
+      description: Skip next stop; penalty if passengers waiting
+      fuel_cost: 7.0
+    4:
+      name: REROUTE_EXPRESS
+      description: Skip 2 stops via express lane; saves 2 time steps
+      fuel_cost: 15.0
+    5:
+      name: DISPATCH_SECOND_BUS
+      description: Deploy overflow bus; one-time use; halves overflow
+      fuel_cost: 30.0
+
+# ── Observation Space ─────────────────────────────────────────────────────
+
+observation_space:
+  type: Dict
+  schema:
+    step:
+      type: int
+      range: [0, 20]
+    max_steps:
+      type: int
+      value: 20
+    bus:
+      type: BusState
+      fields:
+        current_stop_id:     {type: int, range: [0, 7]}
+        next_stop_id:        {type: Optional[int]}
+        passengers_onboard:  {type: int, range: [0, 40]}
+        capacity:            {type: int, value: 40}
+        fuel_level:          {type: float, range: [0.0, 100.0]}
+        speed_kmh:           {type: float}
+        total_delay_steps:   {type: int, range: [0, inf]}
+        is_moving:           {type: bool}
+        second_bus_dispatched: {type: bool}
+    stops:
+      type: List[StopState]
+      length: 8
+      fields:
+        stop_id:               {type: int, range: [0, 7]}
+        name:                  {type: str}
+        waiting_passengers:    {type: int, range: [0, 30]}
+        scheduled_arrival_step:{type: int}
+        actual_arrival_step:   {type: Optional[int]}
+        visited:               {type: bool}
+        distance_km:           {type: float}
+    route_progress:            {type: float, range: [0.0, 1.0]}
+    on_time_stops:             {type: int}
+    late_stops:                {type: int}
+    missed_stops:              {type: int}
+    total_passengers_served:   {type: int}
+    total_passengers_missed:   {type: int}
+    done:                      {type: bool}
+    episode_reward_so_far:     {type: float}
+
+# ── Reward Function ───────────────────────────────────────────────────────
+
+reward:
+  type: shaped
+  description: Dense reward with partial progress signals at every step
+  components:
+    per_step_cost:
+      value: -0.5
+      description: Base time cost; incentivises efficiency
+    on_time_arrival:
+      value: +5.0
+      condition: delay <= 1 step
+    slightly_late_arrival:
+      value: +2.0 to -1.5
+      condition: delay 2–3 steps
+    very_late_arrival:
+      value: -delay (capped at -8)
+      condition: delay > 3 steps
+    passenger_pickup:
+      value: +1.5 per passenger
+    passenger_overflow:
+      value: -0.5 per missed passenger
+    valid_skip:
+      value: +1.0
+      condition: no passengers at skipped stop
+    invalid_skip:
+      value: -2.0 per abandoned passenger
+    route_completion_bonus:
+      value: +20.0
+    schedule_completion_bonus:
+      value: +3.0 per on-time stop
+    fuel_depletion:
+      value: -20.0
+      condition: fuel reaches 0
+    random_events:
+      values: [-5.0, -3.0, -2.0, 0.0]
+      condition: hard/medium difficulty only
+    partial_progress:
+      value: route_progress * 10.0
+      condition: max_steps reached without completion
+
+# ── Tasks ─────────────────────────────────────────────────────────────────
+
+tasks:
+  task1_easy:
+    file: tasks/task1_easy.py
+    difficulty: easy
+    max_steps: 8
+    objective: >
+      Pick up passengers from the first 3 stops (Main Gate, Admin Block,
+      Central Library) within 8 steps, arriving ≤ 2 steps late each.
+    grader:
+      components:
+        stop_coverage:        0.50
+        passenger_collection: 0.30
+        schedule_adherence:   0.20
+    baseline_scores:
+      random: 0.25
+      greedy: 0.80
+
+  task2_medium:
+    file: tasks/task2_medium.py
+    difficulty: medium
+    max_steps: 20
+    objective: >
+      Complete the full 8-stop route within 20 steps while keeping fuel
+      above 20%, serving ≥ 70% of passengers, and arriving on time at
+      ≥ 5 stops.
+    grader:
+      components:
+        route_completion:     0.35
+        passenger_throughput: 0.35
+        fuel_efficiency:      0.15
+        schedule_adherence:   0.15
+    baseline_scores:
+      random: 0.15
+      greedy: 0.55
+
+  task3_hard:
+    file: tasks/task3_hard.py
+    difficulty: hard
+    max_steps: 20
+    fuel_start: 70.0
+    objective: >
+      Achieve optimal fleet management under hard difficulty: ≥ 6/8 stops
+      on time, zero missed stops with waiting passengers, smart overflow
+      dispatch, and positive cumulative reward.
+    grader:
+      components:
+        schedule:          0.25
+        zero_miss:         0.20
+        overflow_mgmt:     0.15
+        reward_efficiency: 0.20
+        passenger_density: 0.20
+    baseline_scores:
+      random: 0.08
+      greedy: 0.38
+      optimal_target: 0.75
+
+# ── Route Definition ──────────────────────────────────────────────────────
+
+route:
+  campus: Takshashila University, Ongur, Tamil Nadu
+  time_window: "07:30 – 09:00"
+  steps_per_episode: 20
+  step_duration_minutes: 4.5
+  stops:
+    - id: 0  name: "Main Gate"       passengers: 8   scheduled_step: 0   distance_km: 0.0
+    - id: 1  name: "Admin Block"     passengers: 5   scheduled_step: 2   distance_km: 0.4
+    - id: 2  name: "Central Library" passengers: 7   scheduled_step: 4   distance_km: 0.6
+    - id: 3  name: "Hostel A"        passengers: 14  scheduled_step: 6   distance_km: 0.5
+    - id: 4  name: "Hostel B"        passengers: 9   scheduled_step: 8   distance_km: 0.3
+    - id: 5  name: "Sports Complex"  passengers: 4   scheduled_step: 10  distance_km: 0.7
+    - id: 6  name: "Medical Block"   passengers: 6   scheduled_step: 13  distance_km: 0.5
+    - id: 7  name: "Canteen Hub"     passengers: 11  scheduled_step: 15  distance_km: 0.4
+
+# ── Reproducibility ───────────────────────────────────────────────────────
+
+reproducibility:
+  seeds: [42, 123, 777, 2024, 99]
+  python: ">=3.10"
+  dependencies:
+    pydantic: ">=2.0"
+
+# ── Citation ──────────────────────────────────────────────────────────────
+
+citation: >
+  @misc{transit-openenv-2025,
+    title  = {Takshashila Transit OpenEnv: Real-World Bus Fleet Management},
+    author = {Ram},
+    year   = {2025},
+    note   = {First-year BBA FinTech, Takshashila University}
+  }
