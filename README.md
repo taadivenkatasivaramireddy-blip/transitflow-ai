@@ -1,4 +1,13 @@
-# 🚌 Takshashila Transit — OpenEnv
+---
+title: Transitlyiq
+emoji: 🚌
+colorFrom: blue
+colorTo: green
+sdk: fastapi
+app_file: app.py
+pinned: false
+---
+# 🚌 Takshashila Transit — OpenEnv 
 
 **Real-world college bus fleet management environment**  
 `TakshashilaTransit-v1` · OpenEnv 1.0 · Takshashila University, Ongur, Tamil Nadu
