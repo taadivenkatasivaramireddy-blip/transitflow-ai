@@ -1,13 +1,16 @@
 ---
-title: Transitlyiq
-emoji: 🚌
+title: TRANSITLYIQ
+sdk: docker
+emoji: 🏃
 colorFrom: blue
 colorTo: green
-sdk: fastapi
-app_file: app.py
 pinned: false
+short_description: 'REAL WORLS LIVE UNIVRSITY BUS TRACKING SYSTEM '
 ---
-# 🚌 Takshashila Transit — OpenEnv 
+-+
+
+# 🚌 Takshashila Transit — OpenEnv
+
 
 **Real-world college bus fleet management environment**  
 `TakshashilaTransit-v1` · OpenEnv 1.0 · Takshashila University, Ongur, Tamil Nadu
@@ -269,3 +272,4 @@ Built by **Ram**, BBA FinTech (Year 1), Takshashila University, Ongur, Tamil Nad
 This environment is directly inspired by **Takshashila Transit** — a real campus bus live-tracking platform under development for Takshashila University, featuring Firebase real-time GPS, OSRM routing, and geofence alerts.
 
 The OpenEnv simulation abstracts the operational dispatch problem into a clean RL interface that researchers can benchmark agents against without needing access to the live system.
+-+++
