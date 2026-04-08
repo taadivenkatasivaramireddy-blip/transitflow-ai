@@ -22,8 +22,8 @@ from dataclasses import dataclass
 from typing import Dict
 
 from transit_env import TransitEnv
-from transit_env.models import Action, Observation
-from transit_env.env import CAMPUS_ROUTE
+from models import Action, Observation
+from transit_env import CAMPUS_ROUTE
 
 TOTAL_BASE_PASSENGERS = sum(s["base_passengers"] for s in CAMPUS_ROUTE)
 MIN_PASSENGER_RATE = 0.70
