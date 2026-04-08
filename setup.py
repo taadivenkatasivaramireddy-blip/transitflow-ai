@@ -4,7 +4,7 @@ setup(
     name="takshashila-transit-openenv",
     version="1.0.0",
     description="Real-world college bus fleet management RL environment (OpenEnv spec)",
-    author="Ram",
+    author="Rami Reddy",
     packages=find_packages(),
     python_requires=">=3.10",
     install_requires=[
