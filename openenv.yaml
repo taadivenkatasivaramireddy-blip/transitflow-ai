@@ -4,7 +4,7 @@
 id: TakshashilaTransit-v1
 version: "1.0.0"
 authors:
-  - name: Ram
+  - name: venkata siva rami reddy taadi
     affiliation: Takshashila University, Ongur, Tamil Nadu
 description: >
   A real-world college bus fleet management environment set at
@@ -243,7 +243,7 @@ reproducibility:
 citation: >
   @misc{transit-openenv-2025,
     title  = {Takshashila Transit OpenEnv: Real-World Bus Fleet Management},
-    author = {Ram},
+    author = {venkata siva rami reddy taadi},
     year   = {2025},
     note   = {First-year BBA FinTech, Takshashila University}
   }
