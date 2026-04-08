@@ -1,204 +1,119 @@
-"""
-app.py — Gradio interface for Takshashila Transit OpenEnv
-Deployed on HuggingFace Spaces.
-"""
-
-import sys
-import json
-import gradio as gr
-import pandas as pd
+import os
+import textwrap
+from typing import List, Optional
+from openai import OpenAI
 
 from transit_env import TransitEnv
 from models import Action
-from task1_easy import run_task as run_t1
-from task2_medium import run_task as run_t2
-from task3_hard import run_task as run_t3, HardTransitEnv
-from run_baselines import random_agent, greedy_agent, optimal_agent
 
-# ── Global state ──────────────────────────────────────────────────────────────
+# --- Mandatory Hackathon Variables ---
+API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
+API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
+MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
+"sk-dummy-key-to-stop-crash"
+TASK_NAME = "task1_easy"
+BENCHMARK = "TakshashilaTransit-v1"
+MAX_STEPS = 20
+SUCCESS_SCORE_TARGET = 15.0  # Adjust based on your max possible score
 
-_env: TransitEnv | None = None
-_trajectory = []
-_current_obs = None
+SYSTEM_PROMPT = textwrap.dedent(
+    """
+    You are the AI dispatcher for the campus bus system.
+    Maximize passenger pickup, maintain schedule adherence, and manage fuel.
+    
+    Choose ONE action ID from the following options:
+    0 = MOVE_TO_NEXT_STOP
+    1 = WAIT_AT_STOP
+    2 = PICKUP_PASSENGERS
+    3 = SKIP_STOP
+    4 = REROUTE_EXPRESS
+    5 = DISPATCH_SECOND_BUS
 
-ACTION_NAMES = [a.name for a in Action]
+    Reply with EXACTLY ONE NUMBER between 0 and 5. Do not add any text.
+    """
+).strip()
 
+def log_start(task: str, env: str, model: str) -> None:
+    print(f"[START] task={task} env={env} model={model}", flush=True)
 
-def init_env(difficulty: str, seed: int):
-    global _env, _trajectory, _current_obs
-    _env = TransitEnv(seed=int(seed), difficulty=difficulty)
-    _current_obs = _env.reset()
-    _trajectory = []
-    return _env.render(), get_state_table(), "✅ Environment reset. Ready to step."
+def log_step(step: int, action: str, reward: float, done: bool, error: Optional[str]) -> None:
+    error_val = error if error else "null"
+    done_val = str(done).lower()
+    print(f"[STEP] step={step} action={action} reward={reward:.2f} done={done_val} error={error_val}", flush=True)
 
+def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
+    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
+    print(f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rewards_str}", flush=True)
 
-def do_step(action_name: str):
-    global _current_obs, _trajectory
-    if _env is None:
-        return "❌ Call reset() first.", None, ""
-    if _current_obs.done:
-        return _env.render(), get_state_table(), "⚠️ Episode done. Reset to play again."
+def get_model_action(client: OpenAI, step: int, obs) -> int:
+    try:
+        # Fallbacks to prevent script crashing if the object structure shifts
+        fuel = getattr(obs.bus, 'fuel', "N/A") if hasattr(obs, 'bus') else "N/A"
+        passengers = getattr(obs.bus, 'passengers', "N/A") if hasattr(obs, 'bus') else "N/A"
 
-    action_id = ACTION_NAMES.index(action_name)
-    result = _env.step(action_id)
-    _trajectory.append((action_id, result.observation))
-    _current_obs = result.observation
+        user_prompt = f"Step: {step} | Fuel: {fuel} | Passengers: {passengers}\nWhich action ID (0-5) will you take?"
+        
+        completion = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.1,
+            max_tokens=10,
+        )
+        text = (completion.choices[0].message.content or "").strip()
+        # Bulletproof extraction: grabs the first digit found
+        action_num = int(''.join(filter(str.isdigit, text)) or 0)
+        return max(0, min(5, action_num))
+    except Exception as exc:
+        print(f"[DEBUG] Model request failed: {exc}", flush=True)
+        return 0
 
-    events = " | ".join(result.info.get("events", []))
-    status = f"Step {_current_obs.step} | Reward: {result.reward:+.2f} | {events}"
-    if result.done:
-        status += f"\n🏁 Episode complete! Total reward: {_current_obs.episode_reward_so_far:.2f}"
-
-    return _env.render(), get_state_table(), status
-
-
-def get_state_table():
-    if _env is None or _current_obs is None:
-        return pd.DataFrame()
-    stops = _current_obs.stops
-    rows = []
-    for s in stops:
-        status = "✓ Visited" if s.visited else f"{s.waiting_passengers} waiting"
-        current = "🚌 HERE" if s.stop_id == _current_obs.bus.current_stop_id else ""
-        rows.append({
-            "Stop": s.name,
-            "Status": status,
-            "Sched.": s.scheduled_arrival_step,
-            "Actual": s.actual_arrival_step or "—",
-            "Bus": current,
-        })
-    return pd.DataFrame(rows)
-
-
-def run_benchmark(agent_name: str, seed: int):
-    agent_map = {"Random": random_agent, "Greedy": greedy_agent, "Optimal": optimal_agent}
-    agent_fn = agent_map[agent_name]
-
-    rows = []
-    for task_fn, task_label, diff in [
-        (run_t1, "Task 1 — Easy",   "easy"),
-        (run_t2, "Task 2 — Medium", "medium"),
-        (run_t3, "Task 3 — Hard",   "hard"),
-    ]:
-        result = task_fn(agent_fn, seed=int(seed))
-        breakdown_str = " | ".join(f"{k}: {v:.3f}" for k, v in result.breakdown.items())
-        rows.append({
-            "Task":      task_label,
-            "Score":     f"{result.score:.4f}",
-            "Breakdown": breakdown_str,
-        })
-
-    return pd.DataFrame(rows)
-
-
-# ── Gradio UI ─────────────────────────────────────────────────────────────────
-
-with gr.Blocks(
-    title="Takshashila Transit OpenEnv",
-    theme=gr.themes.Base(primary_hue="emerald"),
-) as demo:
-
-    gr.Markdown("""
-# 🚌 Takshashila Transit — OpenEnv
-**Real-world college bus fleet management environment**  
-Takshashila University, Ongur, Tamil Nadu · `TakshashilaTransit-v1`
-
-> An AI agent controls a campus bus dispatcher, serving 8 stops in a morning route.
-> API: `env.reset()` → `env.step(action)` → `env.state()`
-""")
-
-    with gr.Tabs():
-
-        # ── Tab 1: Interactive Play ───────────────────────────────────────────
-        with gr.Tab("🎮 Interactive Environment"):
-            with gr.Row():
-                diff_dropdown = gr.Dropdown(
-                    ["easy", "medium", "hard"], value="medium", label="Difficulty"
-                )
-                seed_input = gr.Number(value=42, label="Seed", precision=0)
-                reset_btn = gr.Button("↺ reset()", variant="primary")
-
-            status_box = gr.Textbox(label="Step Info", lines=2)
-
-            with gr.Row():
-                render_box = gr.Textbox(label="env.render()", lines=16, max_lines=20)
-                state_table = gr.Dataframe(label="Bus Stops State", wrap=True)
-
-            action_dropdown = gr.Dropdown(
-                ACTION_NAMES, value="MOVE_TO_NEXT_STOP", label="Action"
-            )
-            step_btn = gr.Button("▶ step(action)", variant="secondary")
-
-            reset_btn.click(init_env, [diff_dropdown, seed_input],
-                            [render_box, state_table, status_box])
-            step_btn.click(do_step, [action_dropdown],
-                           [render_box, state_table, status_box])
-
-        # ── Tab 2: Benchmark ──────────────────────────────────────────────────
-        with gr.Tab("📊 Baseline Benchmark"):
-            gr.Markdown("Run a baseline agent across all 3 tasks and see scores.")
-            with gr.Row():
-                agent_dropdown = gr.Dropdown(
-                    ["Random", "Greedy", "Optimal"], value="Optimal", label="Agent"
-                )
-                bench_seed = gr.Number(value=42, label="Seed", precision=0)
-                bench_btn = gr.Button("Run Benchmark", variant="primary")
-
-            bench_table = gr.Dataframe(label="Results (score 0.0 – 1.0)", wrap=True)
-            bench_btn.click(run_benchmark, [agent_dropdown, bench_seed], bench_table)
-
-        # ── Tab 3: API Reference ──────────────────────────────────────────────
-import uvicorn
-from fastapi import FastAPI
-from pydantic import BaseModel
-import numpy as np
-from transit_env import TransitEnv
-from models import Action # No dot prefix
-
-app = FastAPI()
-
-# Initialize environment - ensure these parameters match your openenv.yaml
-try:
+def main() -> None:
+    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY) "sk-dummy-key-to-bypass-hf-error"
     env = TransitEnv(seed=42, difficulty="medium")
-except Exception as e:
-    print(f"Init Error: {e}")
-    env = TransitEnv()
 
-class ActionRequest(BaseModel):
-    action: int
+    rewards: List[float] = []
+    steps_taken = 0
+    score = 0.0
+    success = False
 
-@app.get("/")
-async def health():
-    return {"status": "ready"}
+    log_start(task=TASK_NAME, env=BENCHMARK, model=MODEL_NAME)
 
-@app.post("/reset")
-async def reset():
     try:
-        observation, info = env.reset()
-        # Convert numpy arrays to lists so the Judge can read them
-        if isinstance(observation, np.ndarray):
-            observation = observation.tolist()
-        return {"observation": observation, "info": info}
-    except Exception as e:
-        return {"error": str(e)}
+        obs, info = env.reset()
+        
+        for step in range(1, MAX_STEPS + 1):
+            action_id = get_model_action(client, step, obs)
+            
+            try:
+                action_enum = list(Action)[action_id]
+                obs, reward, terminated, truncated, info = env.step(action_enum)
+                error = None
+            except Exception as e:
+                action_enum = Action.MOVE_TO_NEXT_STOP # Failsafe
+                reward = -1.0
+                terminated = True
+                truncated = False
+                error = str(e)
+            
+            done = terminated or truncated
+            rewards.append(float(reward))
+            steps_taken = step
+            
+            log_step(step=step, action=action_enum.name, reward=reward, done=done, error=error)
 
-@app.post("/step")
-async def step(request: ActionRequest):
-    try:
-        obs, reward, terminated, truncated, info = env.step(request.action)
-        if isinstance(obs, np.ndarray):
-            obs = obs.tolist()
-        return {
-            "observation": obs,
-            "reward": float(reward),
-            "terminated": bool(terminated),
-            "truncated": bool(truncated),
-            "info": info
-        }
-    except Exception as e:
-        return {"error": str(e)}
+            if done:
+                break
+
+        # Mandatory Hackathon score normalization [0.0 to 1.0]
+        total_reward = sum(rewards)
+        score = max(0.0, min(1.0, total_reward / SUCCESS_SCORE_TARGET))
+        success = score >= 0.1  # Matches the sample script's threshold
+
+    finally:
+        log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
+
 if __name__ == "__main__":
-   #this keeps the server awake permanently
-   uvicorn.run(app,host="0.0.0.0",port=7860)
-
- 
+    main()
