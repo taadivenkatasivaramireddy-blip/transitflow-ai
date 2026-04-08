@@ -26,7 +26,7 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from transit_env.models import Action, Observation
+from models import Action, Observation
 
 # ── Agent Definitions ─────────────────────────────────────────────────────────
 
