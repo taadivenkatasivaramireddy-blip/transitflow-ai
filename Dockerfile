@@ -44,4 +44,4 @@ ENV GRADIO_SERVER_NAME=0.0.0.0
 ENV GRADIO_SERVER_PORT=7860
 
 # Launch Gradio app
-CMD ["python", "app.py"]
+CMD ["python", "server/app.py"]
