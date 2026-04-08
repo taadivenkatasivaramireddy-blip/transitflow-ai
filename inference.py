@@ -9,11 +9,11 @@ import gradio as gr
 import pandas as pd
 
 from transit_env import TransitEnv
-from transit_env.models import Action
-from tasks.task1_easy import run_task as run_t1
-from tasks.task2_medium import run_task as run_t2
-from tasks.task3_hard import run_task as run_t3, HardTransitEnv
-from baselines.run_baselines import random_agent, greedy_agent, optimal_agent
+from models import Action
+from task1_easy import run_task as run_t1
+from task2_medium import run_task as run_t2
+from task3_hard import run_task as run_t3, HardTransitEnv
+from run_baselines import random_agent, greedy_agent, optimal_agent
 
 # ── Global state ──────────────────────────────────────────────────────────────
 
@@ -148,63 +148,57 @@ Takshashila University, Ongur, Tamil Nadu · `TakshashilaTransit-v1`
             bench_btn.click(run_benchmark, [agent_dropdown, bench_seed], bench_table)
 
         # ── Tab 3: API Reference ──────────────────────────────────────────────
-        with gr.Tab("📖 API Reference"):
-            gr.Markdown("""
-## Environment API
-
-```python
+import uvicorn
+from fastapi import FastAPI
+from pydantic import BaseModel
+import numpy as np
 from transit_env import TransitEnv
-from transit_env.models import Action
+from models import Action # No dot prefix
 
-env = TransitEnv(seed=42, difficulty="medium")
+app = FastAPI()
 
-# reset() → Observation
-obs = env.reset()
+# Initialize environment - ensure these parameters match your openenv.yaml
+try:
+    env = TransitEnv(seed=42, difficulty="medium")
+except Exception as e:
+    print(f"Init Error: {e}")
+    env = TransitEnv()
 
-# step(action) → StepResult(observation, reward, done, info)
-result = env.step(Action.MOVE_TO_NEXT_STOP)
-print(result.reward, result.done)
+class ActionRequest(BaseModel):
+    action: int
 
-# state() → Observation (no side effects)
-obs = env.state()
-```
+@app.get("/")
+async def health():
+    return {"status": "ready"}
 
-## Action Space
+@app.post("/reset")
+async def reset():
+    try:
+        observation, info = env.reset()
+        # Convert numpy arrays to lists so the Judge can read them
+        if isinstance(observation, np.ndarray):
+            observation = observation.tolist()
+        return {"observation": observation, "info": info}
+    except Exception as e:
+        return {"error": str(e)}
 
-| ID | Name | Description | Fuel Cost |
-|----|------|-------------|-----------|
-| 0  | MOVE_TO_NEXT_STOP | Advance to next stop | 7 |
-| 1  | WAIT_AT_STOP | Hold at current stop | 0 |
-| 2  | PICKUP_PASSENGERS | Board waiting passengers | 0 |
-| 3  | SKIP_STOP | Skip next stop | 7 |
-| 4  | REROUTE_EXPRESS | Skip 2 stops fast | 15 |
-| 5  | DISPATCH_SECOND_BUS | Deploy overflow bus | 30 |
-
-## Reward Signal
-
-| Event | Reward |
-|-------|--------|
-| On-time arrival (≤1 step) | +5.0 |
-| Passenger pickup | +1.5 per passenger |
-| Very late arrival | −delay (max −8) |
-| Route completion | +20.0 |
-| Fuel depletion | −20.0 |
-| Per step cost | −0.5 |
-
-## Tasks
-
-| Task | Difficulty | Score Target | Baseline (greedy) |
-|------|------------|-------------|-------------------|
-| task1_easy | easy | 0.80+ | 0.80 |
-| task2_medium | medium | 0.65+ | 0.55 |
-| task3_hard | hard | 0.75+ | 0.38 |
-""")
-
-    gr.Markdown("""
----
-Built by **Ram** · BBA FinTech · Takshashila University  
-[GitHub](https://github.com) · [openenv.yaml](openenv.yaml)
-""")
-
+@app.post("/step")
+async def step(request: ActionRequest):
+    try:
+        obs, reward, terminated, truncated, info = env.step(request.action)
+        if isinstance(obs, np.ndarray):
+            obs = obs.tolist()
+        return {
+            "observation": obs,
+            "reward": float(reward),
+            "terminated": bool(terminated),
+            "truncated": bool(truncated),
+            "info": info
+        }
+    except Exception as e:
+        return {"error": str(e)}
 if __name__ == "__main__":
-    demo.launch(server_name="0.0.0.0", server_port=7860)
+   #this keeps the server awake permanently
+   uvicorn.run(app,host="0.0.0.0",port=7860)
+
+ 
