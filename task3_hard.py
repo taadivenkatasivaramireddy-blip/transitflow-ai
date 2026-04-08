@@ -27,8 +27,8 @@ from dataclasses import dataclass
 from typing import Dict, List, Tuple
 
 from transit_env import TransitEnv
-from transit_env.models import Action, Observation
-from transit_env.env import CAMPUS_ROUTE
+from models import Action, Observation
+from transit_env import CAMPUS_ROUTE
 
 TOTAL_BASE_PASSENGERS = sum(s["base_passengers"] for s in CAMPUS_ROUTE)
 HARD_FUEL_START = 70.0  # Override in env init
