@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from typing import Dict, Any
 
 from transit_env import TransitEnv
-from transit_env.models import Action, Observation
+from models import Action, Observation
 
 
 @dataclass
