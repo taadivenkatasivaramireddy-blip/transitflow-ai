@@ -71,7 +71,7 @@ def get_model_action(client: OpenAI, step: int, obs) -> int:
         return 0
 
 def main() -> None:
-    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY) "sk-dummy-key-to-bypass-hf-error"
+    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY or  "sk-dummy-key-to-bypass-hf-error")
     env = TransitEnv(seed=42, difficulty="medium")
 
     rewards: List[float] = []
