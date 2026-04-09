@@ -6,12 +6,15 @@ from openai import OpenAI
 from transit_env import TransitEnv
 from models import Action
 
-# --- Configuration ---
+# --- Mandatory Hackathon Variables ---
+# Fallback dummy key to prevent crashes before the Judge injects the real key
 API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY") or "sk-dummy-key"
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
 
-TASK_NAME = "task1_easy"
+# The OpenEnv Judge dynamically passes the task name when running the script.
+# We default to 'task1_easy' so it doesn't crash if run manually.
+TASK_NAME = os.getenv("TASK_NAME") or os.getenv("MY_ENV_V4_TASK") or "task1_easy"
 BENCHMARK = "TakshashilaTransit-v1"
 MAX_STEPS = 20
 SUCCESS_SCORE_TARGET = 15.0  
@@ -47,7 +50,7 @@ def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> No
 
 def get_model_action(client: OpenAI, step: int, obs) -> int:
     try:
-        # Defensive attribute access
+        # Defensive property access to prevent crashing
         bus = getattr(obs, 'bus', None)
         fuel = getattr(bus, 'fuel', "N/A") if bus else "N/A"
         passengers = getattr(bus, 'passengers', "N/A") if bus else "N/A"
@@ -72,7 +75,15 @@ def get_model_action(client: OpenAI, step: int, obs) -> int:
 
 def main() -> None:
     client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
-    env = TransitEnv(seed=42, difficulty="medium")
+    
+    # Adjust simulation difficulty based on the task name the Judge provided
+    difficulty = "medium"
+    if "easy" in TASK_NAME.lower():
+        difficulty = "easy"
+    elif "hard" in TASK_NAME.lower():
+        difficulty = "hard"
+
+    env = TransitEnv(seed=42, difficulty=difficulty)
 
     rewards: List[float] = []
     steps_taken = 0
@@ -82,25 +93,37 @@ def main() -> None:
     log_start(task=TASK_NAME, env=BENCHMARK, model=MODEL_NAME)
 
     try:
-        # Properly capture the single observation object
-        obs = env.reset()
+        # Bulletproof reset handling (catches both objects and tuples)
+        raw_reset = env.reset()
+        obs = getattr(raw_reset, 'observation', raw_reset)
+        if isinstance(raw_reset, tuple):
+            obs = raw_reset[0]
         
         for step in range(1, MAX_STEPS + 1):
             action_id = get_model_action(client, step, obs)
-            action_enum = list(Action)[action_id]
+            
+            try:
+                action_enum = list(Action)[action_id]
+            except IndexError:
+                action_enum = list(Action)[0]
+                
             error = None
             reward = 0.0
             done = False
             
             try:
-                # Properly capture the single Result object
+                # Bulletproof step handling
                 result = env.step(action_enum)
-                
-                # Extract data safely from the Result object
                 obs = getattr(result, 'observation', result)
                 reward = float(getattr(result, 'reward', 0.0))
                 done = bool(getattr(result, 'done', False))
                 
+                # Failsafe if the environment surprisingly returns a tuple
+                if isinstance(result, tuple):
+                    obs = result[0]
+                    reward = float(result[1])
+                    done = bool(result[2])
+                    
             except Exception as e:
                 error = str(e)
                 reward = -1.0
@@ -114,8 +137,12 @@ def main() -> None:
             if done:
                 break
 
+        # Calculate score and enforce the strict Hackathon boundaries
         total_reward = sum(rewards)
-        score = max(0.0, min(1.0, total_reward / SUCCESS_SCORE_TARGET))
+        raw_score = total_reward / SUCCESS_SCORE_TARGET
+        
+        # MANDATORY CLAMP: Ensures the score is never exactly 0.0 or exactly 1.0
+        score = max(0.01, min(0.99, raw_score))
         success = score >= 0.1
 
     finally:
