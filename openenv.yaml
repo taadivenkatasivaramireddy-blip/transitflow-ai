@@ -159,7 +159,7 @@ reward:
 
 tasks:
   task1_easy:
-    file: tasks/task1_easy.py
+    file: task1_easy.py
     difficulty: easy
     max_steps: 8
     objective: >
@@ -175,7 +175,7 @@ tasks:
       greedy: 0.80
 
   task2_medium:
-    file: tasks/task2_medium.py
+    file: task2_medium.py
     difficulty: medium
     max_steps: 20
     objective: >
@@ -193,7 +193,7 @@ tasks:
       greedy: 0.55
 
   task3_hard:
-    file: tasks/task3_hard.py
+    file: task3_hard.py
     difficulty: hard
     max_steps: 20
     fuel_start: 70.0
