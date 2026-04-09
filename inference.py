@@ -7,17 +7,20 @@ from transit_env import TransitEnv
 from models import Action
 
 # --- Mandatory Hackathon Variables ---
-# Fallback dummy key to prevent crashes before the Judge injects the real key
 API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY") or "sk-dummy-key"
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
 
-# The OpenEnv Judge dynamically passes the task name when running the script.
-# We default to 'task1_easy' so it doesn't crash if run manually.
-TASK_NAME = os.getenv("TASK_NAME") or os.getenv("MY_ENV_V4_TASK") or "task1_easy"
 BENCHMARK = "TakshashilaTransit-v1"
 MAX_STEPS = 20
 SUCCESS_SCORE_TARGET = 15.0  
+
+# Define the 3 mandatory tasks the Judge is looking for
+TASKS = [
+    {"name": "task1_easy", "difficulty": "easy"},
+    {"name": "task2_medium", "difficulty": "medium"},
+    {"name": "task3_hard", "difficulty": "hard"}
+]
 
 SYSTEM_PROMPT = textwrap.dedent(
     """
@@ -50,7 +53,6 @@ def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> No
 
 def get_model_action(client: OpenAI, step: int, obs) -> int:
     try:
-        # Defensive property access to prevent crashing
         bus = getattr(obs, 'bus', None)
         fuel = getattr(bus, 'fuel', "N/A") if bus else "N/A"
         passengers = getattr(bus, 'passengers', "N/A") if bus else "N/A"
@@ -73,16 +75,8 @@ def get_model_action(client: OpenAI, step: int, obs) -> int:
         print(f"[DEBUG] Model request failed: {exc}", flush=True)
         return 0
 
-def main() -> None:
-    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
-    
-    # Adjust simulation difficulty based on the task name the Judge provided
-    difficulty = "medium"
-    if "easy" in TASK_NAME.lower():
-        difficulty = "easy"
-    elif "hard" in TASK_NAME.lower():
-        difficulty = "hard"
-
+def run_single_task(client: OpenAI, task_name: str, difficulty: str) -> None:
+    """Runs a single episode for the specified task and difficulty."""
     env = TransitEnv(seed=42, difficulty=difficulty)
 
     rewards: List[float] = []
@@ -90,10 +84,9 @@ def main() -> None:
     score = 0.0
     success = False
 
-    log_start(task=TASK_NAME, env=BENCHMARK, model=MODEL_NAME)
+    log_start(task=task_name, env=BENCHMARK, model=MODEL_NAME)
 
     try:
-        # Bulletproof reset handling (catches both objects and tuples)
         raw_reset = env.reset()
         obs = getattr(raw_reset, 'observation', raw_reset)
         if isinstance(raw_reset, tuple):
@@ -112,13 +105,11 @@ def main() -> None:
             done = False
             
             try:
-                # Bulletproof step handling
                 result = env.step(action_enum)
                 obs = getattr(result, 'observation', result)
                 reward = float(getattr(result, 'reward', 0.0))
                 done = bool(getattr(result, 'done', False))
                 
-                # Failsafe if the environment surprisingly returns a tuple
                 if isinstance(result, tuple):
                     obs = result[0]
                     reward = float(result[1])
@@ -137,16 +128,23 @@ def main() -> None:
             if done:
                 break
 
-        # Calculate score and enforce the strict Hackathon boundaries
         total_reward = sum(rewards)
         raw_score = total_reward / SUCCESS_SCORE_TARGET
         
-        # MANDATORY CLAMP: Ensures the score is never exactly 0.0 or exactly 1.0
+        # The clamp that fixed the out-of-range error!
         score = max(0.01, min(0.99, raw_score))
         success = score >= 0.1
 
     finally:
         log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
+
+
+def main() -> None:
+    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    
+    # Loop through all 3 tasks in a single execution to satisfy the Judge
+    for task_info in TASKS:
+        run_single_task(client, task_info["name"], task_info["difficulty"])
 
 if __name__ == "__main__":
     main()
