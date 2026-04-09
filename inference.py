@@ -6,15 +6,15 @@ from openai import OpenAI
 from transit_env import TransitEnv
 from models import Action
 
-# --- Mandatory Hackathon Variables ---
-API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
+# --- Configuration ---
+API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY") or "sk-dummy-key"
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
-"sk-dummy-key-to-stop-crash"
+
 TASK_NAME = "task1_easy"
 BENCHMARK = "TakshashilaTransit-v1"
 MAX_STEPS = 20
-SUCCESS_SCORE_TARGET = 15.0  # Adjust based on your max possible score
+SUCCESS_SCORE_TARGET = 15.0  
 
 SYSTEM_PROMPT = textwrap.dedent(
     """
@@ -47,9 +47,10 @@ def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> No
 
 def get_model_action(client: OpenAI, step: int, obs) -> int:
     try:
-        # Fallbacks to prevent script crashing if the object structure shifts
-        fuel = getattr(obs.bus, 'fuel', "N/A") if hasattr(obs, 'bus') else "N/A"
-        passengers = getattr(obs.bus, 'passengers', "N/A") if hasattr(obs, 'bus') else "N/A"
+        # Defensive attribute access
+        bus = getattr(obs, 'bus', None)
+        fuel = getattr(bus, 'fuel', "N/A") if bus else "N/A"
+        passengers = getattr(bus, 'passengers', "N/A") if bus else "N/A"
 
         user_prompt = f"Step: {step} | Fuel: {fuel} | Passengers: {passengers}\nWhich action ID (0-5) will you take?"
         
@@ -63,7 +64,6 @@ def get_model_action(client: OpenAI, step: int, obs) -> int:
             max_tokens=10,
         )
         text = (completion.choices[0].message.content or "").strip()
-        # Bulletproof extraction: grabs the first digit found
         action_num = int(''.join(filter(str.isdigit, text)) or 0)
         return max(0, min(5, action_num))
     except Exception as exc:
@@ -71,7 +71,7 @@ def get_model_action(client: OpenAI, step: int, obs) -> int:
         return 0
 
 def main() -> None:
-    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY or  "sk-dummy-key-to-bypass-hf-error")
+    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
     env = TransitEnv(seed=42, difficulty="medium")
 
     rewards: List[float] = []
@@ -82,24 +82,31 @@ def main() -> None:
     log_start(task=TASK_NAME, env=BENCHMARK, model=MODEL_NAME)
 
     try:
-        obs, info = env.reset()
+        # Properly capture the single observation object
+        obs = env.reset()
         
         for step in range(1, MAX_STEPS + 1):
             action_id = get_model_action(client, step, obs)
+            action_enum = list(Action)[action_id]
+            error = None
+            reward = 0.0
+            done = False
             
             try:
-                action_enum = list(Action)[action_id]
-                obs, reward, terminated, truncated, info = env.step(action_enum)
-                error = None
+                # Properly capture the single Result object
+                result = env.step(action_enum)
+                
+                # Extract data safely from the Result object
+                obs = getattr(result, 'observation', result)
+                reward = float(getattr(result, 'reward', 0.0))
+                done = bool(getattr(result, 'done', False))
+                
             except Exception as e:
-                action_enum = Action.MOVE_TO_NEXT_STOP # Failsafe
-                reward = -1.0
-                terminated = True
-                truncated = False
                 error = str(e)
+                reward = -1.0
+                done = True
             
-            done = terminated or truncated
-            rewards.append(float(reward))
+            rewards.append(reward)
             steps_taken = step
             
             log_step(step=step, action=action_enum.name, reward=reward, done=done, error=error)
@@ -107,10 +114,9 @@ def main() -> None:
             if done:
                 break
 
-        # Mandatory Hackathon score normalization [0.0 to 1.0]
         total_reward = sum(rewards)
         score = max(0.0, min(1.0, total_reward / SUCCESS_SCORE_TARGET))
-        success = score >= 0.1  # Matches the sample script's threshold
+        success = score >= 0.1
 
     finally:
         log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
